@@ -5,32 +5,48 @@
 
 // --- KERNEL CUDA 3D ---
 // Menghitung kontribusi nilai fungsi di setiap voxel (volume pixel)
-__global__ void riemannSum3DKernel(float a, float c, float e, float dx, float dy, float dz, 
-                                   int nx, int ny, int nz, double* d_sum) {
-    // Menghitung indeks global 3D: i (x), j (y), k (z)
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    int j = blockIdx.y * blockDim.y + threadIdx.y;
-    int k = blockIdx.z * blockDim.z + threadIdx.z;
+__global__ void riemannSum3DKernel(double a, double c, double e, double dx, double dy, double dz, 
+                                   long long nx, long long ny, long long nz, double* d_sum) {
+    // 1. Deklarasi Cache (8*8*4 = 256 thread)
+    __shared__ double cache[256];
 
-    // Pastikan indeks berada dalam rentang partisi
+    // Indeks global (Casting ke long long agar tidak overflow)
+    long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+    long long j = (long long)blockIdx.y * blockDim.y + threadIdx.y;
+    long long k = (long long)blockIdx.z * blockDim.z + threadIdx.z;
+
+    // Indeks linear untuk akses shared memory (0 - 255)
+    int tid = (threadIdx.z * (blockDim.x * blockDim.y)) + (threadIdx.y * blockDim.x) + threadIdx.x;
+
+    double voxelValue = 0.0;
     if (i < nx && j < ny && k < nz) {
-        // 1. Cari titik tengah voxel (xi, yj, zk)
-        float xi = a + (i + 0.5f) * dx;
-        float yj = c + (j + 0.5f) * dy;
-        float zk = e + (k + 0.5f) * dz;
+        double xi = a + (i + 0.5) * dx;
+        double yj = c + (j + 0.5) * dy;
+        double zk = e + (k + 0.5) * dz;
 
-        // 2. Evaluasi fungsi f(x,y,z) = x^2 + y^2 + z^2
-        float f_xyz = (xi * xi) + (yj * yj) + (zk * zk);
+        double f_xyz = (xi * xi) + (yj * yj) + (zk * zk);
+        voxelValue = f_xyz * (dx * dy * dz);
+    }
 
-        // 3. Hitung kontribusi volume: f(x,y,z) * delta_V
-        double voxelContribution = (double)f_xyz * dx * dy * dz;
+    // Simpan ke cache dan sinkronisasi
+    cache[tid] = voxelValue;
+    __syncthreads();
 
-        // 4. Akumulasi secara atomik ke memori global
-        atomicAdd(d_sum, voxelContribution);
+    // 2. Parallel Reduction (Pohon Penjumlahan)
+    for (int s = (blockDim.x * blockDim.y * blockDim.z) / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            cache[tid] += cache[tid + s];
+        }
+        __syncthreads();
+    }
+
+    // 3. Hanya satu thread per block yang menulis ke Global Memory
+    if (tid == 0) {
+        atomicAdd(d_sum, cache[0]);
     }
 }
 
-void runSimulation3D(int n) {
+void solveRiemann3D(int n) {
     // Batas interval [-1, 2] untuk ketiga dimensi
     float a = -1.0f, b = 2.0f; // x
     float c = -1.0f, d = 2.0f; // y
@@ -82,13 +98,29 @@ void runSimulation3D(int n) {
 int main() {
     // Untuk 3D, n=200 saja sudah berarti 8 juta thread.
     // n=500 berarti 125 juta thread. Hati-hati dengan timeout kernel pada n yang sangat besar.
-    std::vector<int> partitions = {100, 500, 1000};
+    long long option;
+    std::cout << "run program langsung? 1 = ya : ";
+    std::cin >> option;
 
-    std::cout << "Menghitung Integral 3D (x^2 + y^2 + z^2) dengan CUDA\n";
-    std::cout << "--------------------------------------------------\n";
+    std::cout << "Menghitung Integral 3D (x^2 + y^2 + z^2) dari [-1, 2]^3 secara serial\n";
+    std::cout << "------------------------------------------------------------------\n";
 
-    for (int n : partitions) {
-        runSimulation3D(n);
+    if (option == 1) {
+        // Daftar N (partisi per sisi). Total partisi = N^3
+        std::vector<long long> partitions = {
+            1000,    // Total 1.000.000.000 (Mulai terasa berat di serial)
+            2000,    // Total 8.000.000.000 (Akan sangat lama di serial)
+            3000,    // Total 27.000.000.000 (Akan sangat lama di serial)
+            4000,    // Total 64.000.000.000 (Akan sangat lama di serial)
+        };
+        for (long long n : partitions) {
+            solveRiemann3D(n);
+        }
+    } else {
+        long long n;
+        std::cout << "Masukkan N (partisi per sisi): ";
+        std::cin >> n;
+        solveRiemann3D(n);
     }
 
     return 0;

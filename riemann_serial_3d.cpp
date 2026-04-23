@@ -65,10 +65,10 @@ int main() {
     if (option == 1) {
         // Daftar N (partisi per sisi). Total partisi = N^3
         std::vector<long long> partitions = {
-            100,        // Total 1.000.000
-            500,        // Total 125.000.000
-            1000,       // Total 1.000.000.000 (Mulai terasa berat di serial)
+            1000,    // Total 1.000.000.000 (Mulai terasa berat di serial)
             2000,    // Total 8.000.000.000 (Akan sangat lama di serial)
+            3000,    // Total 27.000.000.000 (Akan sangat lama di serial)
+            4000,    // Total 64.000.000.000 (Akan sangat lama di serial)
         };
         for (long long n : partitions) {
             solveRiemann3D(n);
